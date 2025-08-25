@@ -380,19 +380,17 @@
         (merge listing-data { active: false }))
       (ok true))))
 
-;; Leaderboard system
+;; Leaderboard system - Fixed implementation
 (define-public (update-leaderboard (users (list 100 principal)))
   (begin
     (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-    (ok (map update-leaderboard-entry users))))
+    (ok (fold update-leaderboard-entry-fold users u0))))
 
-(define-private (update-leaderboard-entry (user principal))
-  (let ((rank (+ (fold calculate-rank users u0) u1))
-        (score (calculate-user-score user)))
-    (map-set leaderboard-cache { rank: rank } { user: user, score: score })))
-
-(define-private (calculate-rank (user principal) (current-rank uint))
-  (+ current-rank u1))
+(define-private (update-leaderboard-entry-fold (user principal) (rank uint))
+  (let ((score (calculate-user-score user)))
+    (begin
+      (map-set leaderboard-cache { rank: rank } { user: user, score: score })
+      (+ rank u1))))
 
 (define-private (calculate-user-score (user principal))
   (+ (* (default-to u0 (map-get? user-achievements user)) u10)
@@ -477,16 +475,15 @@
         })
     none))
 
-(define-read-only (get-leaderboard (start-rank uint) (end-rank uint))
-  (let ((results (list)))
-    (fold get-leaderboard-entry (generate-sequence start-rank end-rank) results)))
+;; Fixed leaderboard function - simplified approach
+(define-read-only (get-leaderboard-entry (rank uint))
+  (map-get? leaderboard-cache { rank: rank }))
 
-(define-private (get-leaderboard-entry (rank uint) (acc (list 100 { rank: uint, user: principal, score: uint })))
+(define-read-only (get-top-leaderboard)
+  (let ((top-10 (list u0 u1 u2 u3 u4 u5 u6 u7 u8 u9)))
+    (map get-single-leaderboard-entry top-10)))
+
+(define-private (get-single-leaderboard-entry (rank uint))
   (match (map-get? leaderboard-cache { rank: rank })
-    entry (unwrap-panic (as-max-len? (append acc { rank: rank, user: (get user entry), score: (get score entry) }) u100))
-    acc))
-
-(define-private (generate-sequence (start uint) (end uint))
-  (if (<= start end)
-    (append (list start) (generate-sequence (+ start u1) end))
-    (list)))
+    entry { rank: rank, user: (get user entry), score: (get score entry) }
+    { rank: rank, user: contract-owner, score: u0 }))
