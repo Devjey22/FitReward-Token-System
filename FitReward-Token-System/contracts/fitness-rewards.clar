@@ -202,3 +202,78 @@
     (asserts! (>= (ft-get-balance fit-token tx-sender) u10000) err-insufficient-balance) ;; Need 10k tokens to propose
     ;; This could be expanded to include actual voting mechanism
     (ok true)))
+
+;; Challenge system
+(define-map active-challenges 
+  { challenge-id: uint } 
+  { 
+    creator: principal, 
+    name: (string-ascii 50), 
+    reward-pool: uint, 
+    entry-fee: uint,
+    end-block: uint,
+    max-participants: uint,
+    current-participants: uint,
+    completed: bool
+  })
+
+(define-map challenge-participants { challenge-id: uint, user: principal } bool)
+(define-map challenge-winners { challenge-id: uint } (list 10 principal))
+(define-data-var next-challenge-id uint u1)
+
+(define-public (create-challenge (name (string-ascii 50)) (reward-pool uint) (entry-fee uint) (duration-blocks uint) (max-participants uint))
+  (let ((challenge-id (var-get next-challenge-id)))
+    (begin
+      (unwrap! (check-contract-active) (err u110))
+      (asserts! (>= (ft-get-balance fit-token tx-sender) reward-pool) err-insufficient-balance)
+      (asserts! (> duration-blocks u0) err-invalid-amount)
+      (asserts! (> max-participants u0) err-invalid-amount)
+      (asserts! (<= max-participants u100) err-invalid-amount) ;; Max 100 participants
+      (unwrap! (ft-transfer? fit-token reward-pool tx-sender (as-contract tx-sender)) err-insufficient-balance)
+      (map-set active-challenges { challenge-id: challenge-id }
+        {
+          creator: tx-sender,
+          name: name,
+          reward-pool: reward-pool,
+          entry-fee: entry-fee,
+          end-block: (+ block-height duration-blocks),
+          max-participants: max-participants,
+          current-participants: u0,
+          completed: false
+        })
+      (var-set next-challenge-id (+ challenge-id u1))
+      (ok challenge-id))))
+
+(define-public (join-challenge (challenge-id uint))
+  (let ((challenge-data (unwrap! (map-get? active-challenges { challenge-id: challenge-id }) err-not-found)))
+    (begin
+      (unwrap! (check-contract-active) (err u110))
+      (asserts! (< block-height (get end-block challenge-data)) err-challenge-ended)
+      (asserts! (< (get current-participants challenge-data) (get max-participants challenge-data)) err-challenge-full)
+      (asserts! (is-none (map-get? challenge-participants { challenge-id: challenge-id, user: tx-sender })) err-already-participated)
+      (asserts! (>= (ft-get-balance fit-token tx-sender) (get entry-fee challenge-data)) err-insufficient-balance)
+      (asserts! (not (get completed challenge-data)) err-challenge-ended)
+      (unwrap! (ft-transfer? fit-token (get entry-fee challenge-data) tx-sender (as-contract tx-sender)) err-insufficient-balance)
+      (map-set challenge-participants { challenge-id: challenge-id, user: tx-sender } true)
+      (map-set active-challenges { challenge-id: challenge-id }
+        (merge challenge-data { current-participants: (+ (get current-participants challenge-data) u1) }))
+      (ok true))))
+
+;; Complete challenge and distribute rewards
+(define-public (complete-challenge (challenge-id uint) (winners (list 10 principal)))
+  (let ((challenge-data (unwrap! (map-get? active-challenges { challenge-id: challenge-id }) err-not-found)))
+    (begin
+      (asserts! (is-eq tx-sender (get creator challenge-data)) err-unauthorized)
+      (asserts! (>= block-height (get end-block challenge-data)) err-invalid-amount)
+      (asserts! (not (get completed challenge-data)) err-already-claimed)
+      (map-set challenge-winners { challenge-id: challenge-id } winners)
+      (map-set active-challenges { challenge-id: challenge-id }
+        (merge challenge-data { completed: true }))
+      ;; Distribute rewards to winners
+      (let ((winner-count (len winners))
+            (reward-per-winner (if (> winner-count u0) (/ (get reward-pool challenge-data) winner-count) u0)))
+        (ok (map distribute-challenge-reward winners reward-per-winner))))))
+
+(define-private (distribute-challenge-reward (winner principal) (amount uint))
+  (as-contract (ft-transfer? fit-token amount tx-sender winner)))
+  
