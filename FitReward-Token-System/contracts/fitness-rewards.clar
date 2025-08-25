@@ -102,7 +102,7 @@
 
 ;; Daily check-in reward system with streak bonuses
 (define-public (claim-daily-reward)
-  (let ((current-day (/ block-height u144))
+  (let ((current-day (/ stacks-block-height u144))
         (user-streak (default-to u0 (map-get? user-streaks tx-sender)))
         (last-claim (default-to u0 (map-get? user-last-claim tx-sender))))
     (begin
@@ -159,7 +159,7 @@
 (define-map monthly-bonuses { month: uint } { claimed: bool, amount: uint })
 
 (define-public (claim-weekly-bonus)
-  (let ((current-week (/ block-height u1008))) ;; ~7 days
+  (let ((current-week (/ stacks-block-height u1008))) ;; ~7 days
     (begin
       (try! (check-contract-active))
       (asserts! (>= (default-to u0 (map-get? user-streaks tx-sender)) u7) err-invalid-streak)
@@ -168,7 +168,7 @@
       (ft-mint? fit-token u100 tx-sender))))
 
 (define-public (claim-monthly-bonus)
-  (let ((current-month (/ block-height u4320))) ;; ~30 days
+  (let ((current-month (/ stacks-block-height u4320))) ;; ~30 days
     (begin
       (try! (check-contract-active))
       (asserts! (>= (default-to u0 (map-get? user-achievements tx-sender)) u20) err-insufficient-balance)
@@ -240,7 +240,7 @@
           name: name,
           reward-pool: reward-pool,
           entry-fee: entry-fee,
-          end-block: (+ block-height duration-blocks),
+          end-block: (+ stacks-block-height duration-blocks),
           max-participants: max-participants,
           current-participants: u0,
           completed: false
@@ -252,7 +252,7 @@
   (let ((challenge-data (unwrap! (map-get? active-challenges { challenge-id: challenge-id }) err-not-found)))
     (begin
       (try! (check-contract-active))
-      (asserts! (< block-height (get end-block challenge-data)) err-challenge-ended)
+      (asserts! (< stacks-block-height (get end-block challenge-data)) err-challenge-ended)
       (asserts! (< (get current-participants challenge-data) (get max-participants challenge-data)) err-challenge-full)
       (asserts! (is-none (map-get? challenge-participants { challenge-id: challenge-id, user: tx-sender })) err-already-participated)
       (asserts! (>= (ft-get-balance fit-token tx-sender) (get entry-fee challenge-data)) err-insufficient-balance)
@@ -268,7 +268,7 @@
   (let ((challenge-data (unwrap! (map-get? active-challenges { challenge-id: challenge-id }) err-not-found)))
     (begin
       (asserts! (is-eq tx-sender (get creator challenge-data)) err-unauthorized)
-      (asserts! (>= block-height (get end-block challenge-data)) err-invalid-amount)
+      (asserts! (>= stacks-block-height (get end-block challenge-data)) err-invalid-amount)
       (asserts! (not (get completed challenge-data)) err-already-claimed)
       (map-set challenge-winners { challenge-id: challenge-id } winners)
       (map-set active-challenges { challenge-id: challenge-id }
@@ -302,7 +302,7 @@
         {
           amount: amount,
           lock-blocks: lock-blocks,
-          start-block: block-height,
+          start-block: stacks-block-height,
           reward-rate: reward-rate,
           auto-compound: auto-compound
         })
@@ -313,7 +313,7 @@
   (let ((stake-data (unwrap! (map-get? user-stakes { user: tx-sender, stake-id: stake-id }) err-not-found)))
     (begin
       (try! (check-contract-active))
-      (asserts! (>= block-height (+ (get start-block stake-data) (get lock-blocks stake-data))) err-invalid-streak)
+      (asserts! (>= stacks-block-height (+ (get start-block stake-data) (get lock-blocks stake-data))) err-invalid-streak)
       (let ((stake-amount (get amount stake-data))
             (base-reward (/ (* stake-amount (get reward-rate stake-data)) u100))
             (compound-multiplier (if (get auto-compound stake-data) u12 u10))
@@ -351,7 +351,7 @@
           achievement-type: achievement-type,
           price: price,
           active: true,
-          created-block: block-height
+          created-block: stacks-block-height
         })
       (var-set next-listing-id (+ listing-id u1))
       (ok listing-id))))
@@ -435,7 +435,7 @@
   (map-get? achievement-types { achievement-id: achievement-id }))
 
 (define-read-only (has-claimed-today (user principal))
-  (let ((current-day (/ block-height u144)))
+  (let ((current-day (/ stacks-block-height u144)))
     (is-some (map-get? daily-claims { day: current-day, user: user }))))
 
 (define-read-only (get-contract-params)
@@ -465,7 +465,7 @@
 (define-read-only (get-stake-reward-preview (user principal) (stake-id uint))
   (match (map-get? user-stakes { user: user, stake-id: stake-id })
     stake-data 
-      (let ((elapsed-blocks (- block-height (get start-block stake-data)))
+      (let ((elapsed-blocks (- stacks-block-height (get start-block stake-data)))
             (is-unlocked (>= elapsed-blocks (get lock-blocks stake-data)))
             (base-reward (/ (* (get amount stake-data) (get reward-rate stake-data)) u100))
             (compound-multiplier (if (get auto-compound stake-data) u12 u10))
