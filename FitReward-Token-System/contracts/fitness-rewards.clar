@@ -12,6 +12,7 @@
 (define-constant err-challenge-ended (err u107))
 (define-constant err-challenge-full (err u108))
 (define-constant err-already-participated (err u109))
+(define-constant err-contract-paused (err u110))
 
 (define-data-var total-achievements uint u0)
 (define-data-var daily-reward-pool uint u1000)
@@ -55,27 +56,30 @@
     (var-set contract-paused false)
     (ok true)))
 
+;; Fixed check-contract-active function to return consistent response type
 (define-private (check-contract-active)
-  (asserts! (not (var-get contract-paused)) (err u110)))
+  (if (var-get contract-paused) 
+    err-contract-paused
+    (ok true)))
 
 ;; Core token functions
 (define-public (mint-tokens (recipient principal) (amount uint))
   (begin
-    (unwrap! (check-contract-active) (err u110))
+    (try! (check-contract-active))
     (asserts! (is-eq tx-sender contract-owner) err-owner-only)
     (asserts! (> amount u0) err-invalid-amount)
     (ft-mint? fit-token amount recipient)))
 
 (define-public (transfer (amount uint) (sender principal) (recipient principal))
   (begin
-    (unwrap! (check-contract-active) (err u110))
+    (try! (check-contract-active))
     (asserts! (is-eq tx-sender sender) err-unauthorized)
     (asserts! (>= (ft-get-balance fit-token sender) amount) err-insufficient-balance)
     (ft-transfer? fit-token amount sender recipient)))
 
 (define-public (burn-tokens (amount uint))
   (begin
-    (unwrap! (check-contract-active) (err u110))
+    (try! (check-contract-active))
     (asserts! (> amount u0) err-invalid-amount)
     (asserts! (>= (ft-get-balance fit-token tx-sender) amount) err-insufficient-balance)
     (ft-burn? fit-token amount tx-sender)))
@@ -83,7 +87,7 @@
 (define-public (reward-achievement (user principal) (achievement-id uint))
   (let ((achievement-data (unwrap! (map-get? achievement-types { achievement-id: achievement-id }) err-not-found)))
     (begin
-      (unwrap! (check-contract-active) (err u110))
+      (try! (check-contract-active))
       (asserts! (is-eq tx-sender contract-owner) err-owner-only)
       (map-set user-achievements user 
         (+ (default-to u0 (map-get? user-achievements user)) u1))
@@ -102,7 +106,7 @@
         (user-streak (default-to u0 (map-get? user-streaks tx-sender)))
         (last-claim (default-to u0 (map-get? user-last-claim tx-sender))))
     (begin
-      (unwrap! (check-contract-active) (err u110))
+      (try! (check-contract-active))
       (asserts! (is-none (map-get? daily-claims { day: current-day, user: tx-sender })) err-already-claimed)
       (map-set daily-claims { day: current-day, user: tx-sender } true)
       (map-set user-last-claim tx-sender current-day)
@@ -133,7 +137,7 @@
 (define-public (batch-reward (users (list 20 principal)) (achievement-id uint))
   (begin
     (asserts! (is-eq tx-sender contract-owner) err-owner-only)
-    (unwrap! (check-contract-active) (err u110))
+    (try! (check-contract-active))
     (ok (map reward-single-user users achievement-id))))
 
 (define-private (reward-single-user (user principal) (achievement-id uint))
@@ -157,7 +161,7 @@
 (define-public (claim-weekly-bonus)
   (let ((current-week (/ block-height u1008))) ;; ~7 days
     (begin
-      (unwrap! (check-contract-active) (err u110))
+      (try! (check-contract-active))
       (asserts! (>= (default-to u0 (map-get? user-streaks tx-sender)) u7) err-invalid-streak)
       (asserts! (is-none (map-get? weekly-bonuses { week: current-week })) err-already-claimed)
       (map-set weekly-bonuses { week: current-week } { claimed: true, amount: u100 })
@@ -166,7 +170,7 @@
 (define-public (claim-monthly-bonus)
   (let ((current-month (/ block-height u4320))) ;; ~30 days
     (begin
-      (unwrap! (check-contract-active) (err u110))
+      (try! (check-contract-active))
       (asserts! (>= (default-to u0 (map-get? user-achievements tx-sender)) u20) err-insufficient-balance)
       (asserts! (is-none (map-get? monthly-bonuses { month: current-month })) err-already-claimed)
       (map-set monthly-bonuses { month: current-month } { claimed: true, amount: u500 })
@@ -177,7 +181,7 @@
   (let ((current-referrals (default-to (list) (map-get? user-referrals tx-sender)))
         (referral-count (len current-referrals)))
     (begin
-      (unwrap! (check-contract-active) (err u110))
+      (try! (check-contract-active))
       (asserts! (not (is-eq tx-sender referred-user)) err-invalid-amount)
       (asserts! (< referral-count u10) err-invalid-amount)
       (map-set user-referrals tx-sender (unwrap-panic (as-max-len? (append current-referrals referred-user) u10)))
@@ -224,7 +228,7 @@
 (define-public (create-challenge (name (string-ascii 50)) (reward-pool uint) (entry-fee uint) (duration-blocks uint) (max-participants uint))
   (let ((challenge-id (var-get next-challenge-id)))
     (begin
-      (unwrap! (check-contract-active) (err u110))
+      (try! (check-contract-active))
       (asserts! (>= (ft-get-balance fit-token tx-sender) reward-pool) err-insufficient-balance)
       (asserts! (> duration-blocks u0) err-invalid-amount)
       (asserts! (> max-participants u0) err-invalid-amount)
@@ -247,7 +251,7 @@
 (define-public (join-challenge (challenge-id uint))
   (let ((challenge-data (unwrap! (map-get? active-challenges { challenge-id: challenge-id }) err-not-found)))
     (begin
-      (unwrap! (check-contract-active) (err u110))
+      (try! (check-contract-active))
       (asserts! (< block-height (get end-block challenge-data)) err-challenge-ended)
       (asserts! (< (get current-participants challenge-data) (get max-participants challenge-data)) err-challenge-full)
       (asserts! (is-none (map-get? challenge-participants { challenge-id: challenge-id, user: tx-sender })) err-already-participated)
@@ -289,7 +293,7 @@
   (let ((stake-id (var-get next-stake-id))
         (reward-rate (+ (var-get base-reward-rate) (/ lock-blocks u1440))))
     (begin
-      (unwrap! (check-contract-active) (err u110))
+      (try! (check-contract-active))
       (asserts! (> amount u0) err-invalid-amount)
       (asserts! (>= lock-blocks u1440) err-invalid-amount) ;; Minimum 10 days
       (asserts! (>= (ft-get-balance fit-token tx-sender) amount) err-insufficient-balance)
@@ -308,7 +312,7 @@
 (define-public (unstake-tokens (stake-id uint))
   (let ((stake-data (unwrap! (map-get? user-stakes { user: tx-sender, stake-id: stake-id }) err-not-found)))
     (begin
-      (unwrap! (check-contract-active) (err u110))
+      (try! (check-contract-active))
       (asserts! (>= block-height (+ (get start-block stake-data) (get lock-blocks stake-data))) err-invalid-streak)
       (let ((stake-amount (get amount stake-data))
             (base-reward (/ (* stake-amount (get reward-rate stake-data)) u100))
@@ -338,7 +342,7 @@
   (let ((listing-id (var-get next-listing-id))
         (user-achievement-count (default-to u0 (map-get? user-achievements tx-sender))))
     (begin
-      (unwrap! (check-contract-active) (err u110))
+      (try! (check-contract-active))
       (asserts! (> user-achievement-count u0) err-insufficient-balance)
       (asserts! (> price u0) err-invalid-amount)
       (map-set marketplace-listings { listing-id: listing-id }
@@ -355,7 +359,7 @@
 (define-public (buy-achievement (listing-id uint))
   (let ((listing-data (unwrap! (map-get? marketplace-listings { listing-id: listing-id }) err-not-found)))
     (begin
-      (unwrap! (check-contract-active) (err u110))
+      (try! (check-contract-active))
       (asserts! (get active listing-data) err-not-found)
       (asserts! (not (is-eq tx-sender (get seller listing-data))) err-unauthorized)
       (asserts! (>= (ft-get-balance fit-token tx-sender) (get price listing-data)) err-insufficient-balance)
