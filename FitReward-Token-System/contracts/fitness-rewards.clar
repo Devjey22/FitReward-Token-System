@@ -379,3 +379,114 @@
       (map-set marketplace-listings { listing-id: listing-id }
         (merge listing-data { active: false }))
       (ok true))))
+
+;; Leaderboard system
+(define-public (update-leaderboard (users (list 100 principal)))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (ok (map update-leaderboard-entry users))))
+
+(define-private (update-leaderboard-entry (user principal))
+  (let ((rank (+ (fold calculate-rank users u0) u1))
+        (score (calculate-user-score user)))
+    (map-set leaderboard-cache { rank: rank } { user: user, score: score })))
+
+(define-private (calculate-rank (user principal) (current-rank uint))
+  (+ current-rank u1))
+
+(define-private (calculate-user-score (user principal))
+  (+ (* (default-to u0 (map-get? user-achievements user)) u10)
+     (* (default-to u0 (map-get? user-streaks user)) u5)
+     (/ (ft-get-balance fit-token user) u100)))
+
+;; Enhanced read-only functions
+(define-read-only (get-user-stats (user principal))
+  {
+    balance: (ft-get-balance fit-token user),
+    achievements: (default-to u0 (map-get? user-achievements user)),
+    streak: (default-to u0 (map-get? user-streaks user)),
+    last-claim: (default-to u0 (map-get? user-last-claim user)),
+    referrals: (len (default-to (list) (map-get? user-referrals user))),
+    badges: (len (default-to (list) (map-get? user-badges user))),
+    score: (calculate-user-score user)
+  })
+
+(define-read-only (get-balance (user principal))
+  (ft-get-balance fit-token user))
+
+(define-read-only (get-user-achievements (user principal))
+  (default-to u0 (map-get? user-achievements user)))
+
+(define-read-only (get-user-badges (user principal))
+  (default-to (list) (map-get? user-badges user)))
+
+(define-read-only (get-total-achievements)
+  (var-get total-achievements))
+
+(define-read-only (get-token-supply)
+  (ft-get-supply fit-token))
+
+(define-read-only (get-user-streak (user principal))
+  (default-to u0 (map-get? user-streaks user)))
+
+(define-read-only (get-achievement-type (achievement-id uint))
+  (map-get? achievement-types { achievement-id: achievement-id }))
+
+(define-read-only (has-claimed-today (user principal))
+  (let ((current-day (/ block-height u144)))
+    (is-some (map-get? daily-claims { day: current-day, user: user }))))
+
+(define-read-only (get-contract-params)
+  {
+    daily-reward-pool: (var-get daily-reward-pool),
+    streak-multiplier: (var-get streak-multiplier),
+    total-achievements: (var-get total-achievements),
+    paused: (var-get contract-paused),
+    marketplace-fee-rate: (var-get marketplace-fee-rate)
+  })
+
+(define-read-only (get-challenge (challenge-id uint))
+  (map-get? active-challenges { challenge-id: challenge-id }))
+
+(define-read-only (get-challenge-winners (challenge-id uint))
+  (map-get? challenge-winners { challenge-id: challenge-id }))
+
+(define-read-only (get-user-stake (user principal) (stake-id uint))
+  (map-get? user-stakes { user: user, stake-id: stake-id }))
+
+(define-read-only (get-marketplace-listing (listing-id uint))
+  (map-get? marketplace-listings { listing-id: listing-id }))
+
+(define-read-only (is-challenge-participant (challenge-id uint) (user principal))
+  (is-some (map-get? challenge-participants { challenge-id: challenge-id, user: user })))
+
+(define-read-only (get-stake-reward-preview (user principal) (stake-id uint))
+  (match (map-get? user-stakes { user: user, stake-id: stake-id })
+    stake-data 
+      (let ((elapsed-blocks (- block-height (get start-block stake-data)))
+            (is-unlocked (>= elapsed-blocks (get lock-blocks stake-data)))
+            (base-reward (/ (* (get amount stake-data) (get reward-rate stake-data)) u100))
+            (compound-multiplier (if (get auto-compound stake-data) u12 u10))
+            (final-reward (/ (* base-reward compound-multiplier) u10)))
+        {
+          amount: (get amount stake-data),
+          reward: final-reward,
+          unlocked: is-unlocked,
+          blocks-remaining: (if is-unlocked u0 (- (get lock-blocks stake-data) elapsed-blocks)),
+          auto-compound: (get auto-compound stake-data)
+        })
+    none))
+
+(define-read-only (get-leaderboard (start-rank uint) (end-rank uint))
+  (let ((results (list)))
+    (fold get-leaderboard-entry (generate-sequence start-rank end-rank) results)))
+
+(define-private (get-leaderboard-entry (rank uint) (acc (list 100 { rank: uint, user: principal, score: uint })))
+  (match (map-get? leaderboard-cache { rank: rank })
+    entry (unwrap-panic (as-max-len? (append acc { rank: rank, user: (get user entry), score: (get score entry) }) u100))
+    acc))
+
+(define-private (generate-sequence (start uint) (end uint))
+  (if (<= start end)
+    (append (list start) (generate-sequence (+ start u1) end))
+    (list)))
