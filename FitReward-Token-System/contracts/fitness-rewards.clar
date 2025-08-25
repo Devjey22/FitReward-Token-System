@@ -171,3 +171,34 @@
       (asserts! (is-none (map-get? monthly-bonuses { month: current-month })) err-already-claimed)
       (map-set monthly-bonuses { month: current-month } { claimed: true, amount: u500 })
       (ft-mint? fit-token u500 tx-sender))))
+
+;; Enhanced referral system with tiers
+(define-public (refer-user (referred-user principal))
+  (let ((current-referrals (default-to (list) (map-get? user-referrals tx-sender)))
+        (referral-count (len current-referrals)))
+    (begin
+      (unwrap! (check-contract-active) (err u110))
+      (asserts! (not (is-eq tx-sender referred-user)) err-invalid-amount)
+      (asserts! (< referral-count u10) err-invalid-amount)
+      (map-set user-referrals tx-sender (unwrap-panic (as-max-len? (append current-referrals referred-user) u10)))
+      ;; Tiered rewards based on referral count
+      (let ((referrer-reward (if (>= referral-count u5) u50 u25))
+            (referred-reward (if (>= referral-count u5) u30 u15)))
+        (unwrap! (ft-mint? fit-token referrer-reward tx-sender) err-invalid-amount)
+        (ft-mint? fit-token referred-reward referred-user)))))
+
+(define-public (update-parameters (daily-pool uint) (multiplier uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (> daily-pool u0) err-invalid-amount)
+    (asserts! (> multiplier u0) err-invalid-amount)
+    (var-set daily-reward-pool daily-pool)
+    (var-set streak-multiplier multiplier)
+    (ok true)))
+
+;; Governance functions for future upgrades
+(define-public (propose-parameter-change (param (string-ascii 20)) (new-value uint))
+  (begin
+    (asserts! (>= (ft-get-balance fit-token tx-sender) u10000) err-insufficient-balance) ;; Need 10k tokens to propose
+    ;; This could be expanded to include actual voting mechanism
+    (ok true)))
