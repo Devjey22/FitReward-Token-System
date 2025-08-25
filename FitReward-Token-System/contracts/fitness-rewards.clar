@@ -138,7 +138,12 @@
   (begin
     (asserts! (is-eq tx-sender contract-owner) err-owner-only)
     (try! (check-contract-active))
-    (ok (map (lambda (user) (reward-single-user user achievement-id)) users))))
+    (ok (fold batch-reward-fold users achievement-id))))
+
+(define-private (batch-reward-fold (user principal) (achievement-id uint))
+  (begin
+    (reward-single-user user achievement-id)
+    achievement-id))
 
 (define-private (reward-single-user (user principal) (achievement-id uint))
   (let ((achievement-data (unwrap-panic (map-get? achievement-types { achievement-id: achievement-id }))))
@@ -149,10 +154,11 @@
       ;; Award badge
       (let ((current-badges (default-to (list) (map-get? user-badges user)))
             (badge-id (get badge-id achievement-data)))
-        (if (is-none (index-of current-badges badge-id))
-          (map-set user-badges user (unwrap-panic (as-max-len? (append current-badges badge-id) u20)))
-          true))
-      (unwrap-panic (ft-mint? fit-token (get reward-amount achievement-data) user)))))
+        (begin
+          (if (is-none (index-of current-badges badge-id))
+            (map-set user-badges user (unwrap-panic (as-max-len? (append current-badges badge-id) u20)))
+            true)
+          (unwrap-panic (ft-mint? fit-token (get reward-amount achievement-data) user)))))))
 
 ;; Weekly/monthly bonus system
 (define-map weekly-bonuses { week: uint } { claimed: bool, amount: uint })
@@ -164,8 +170,9 @@
       (try! (check-contract-active))
       (asserts! (>= (default-to u0 (map-get? user-streaks tx-sender)) u7) err-invalid-streak)
       (asserts! (is-none (map-get? weekly-bonuses { week: current-week })) err-already-claimed)
-      (map-set weekly-bonuses { week: current-week } { claimed: true, amount: u100 })
-      (ft-mint? fit-token u100 tx-sender))))
+      (begin
+        (map-set weekly-bonuses { week: current-week } { claimed: true, amount: u100 })
+        (ft-mint? fit-token u100 tx-sender)))))
 
 (define-public (claim-monthly-bonus)
   (let ((current-month (/ stacks-block-height u4320))) ;; ~30 days
@@ -173,8 +180,9 @@
       (try! (check-contract-active))
       (asserts! (>= (default-to u0 (map-get? user-achievements tx-sender)) u20) err-insufficient-balance)
       (asserts! (is-none (map-get? monthly-bonuses { month: current-month })) err-already-claimed)
-      (map-set monthly-bonuses { month: current-month } { claimed: true, amount: u500 })
-      (ft-mint? fit-token u500 tx-sender))))
+      (begin
+        (map-set monthly-bonuses { month: current-month } { claimed: true, amount: u500 })
+        (ft-mint? fit-token u500 tx-sender)))))
 
 ;; Enhanced referral system with tiers
 (define-public (refer-user (referred-user principal))
@@ -276,10 +284,17 @@
       ;; Distribute rewards to winners
       (let ((winner-count (len winners))
             (reward-per-winner (if (> winner-count u0) (/ (get reward-pool challenge-data) winner-count) u0)))
-        (ok (map (lambda (winner) (distribute-challenge-reward winner reward-per-winner)) winners))))))
+        (begin
+          (fold distribute-challenge-reward-fold winners reward-per-winner)
+          (ok true))))))
 
 (define-private (distribute-challenge-reward (winner principal) (amount uint))
   (as-contract (ft-transfer? fit-token amount tx-sender winner)))
+
+(define-private (distribute-challenge-reward-fold (winner principal) (amount uint))
+  (begin
+    (unwrap-panic (distribute-challenge-reward winner amount))
+    amount))
 
 ;; Enhanced staking system
 (define-map user-stakes 
@@ -470,13 +485,13 @@
             (base-reward (/ (* (get amount stake-data) (get reward-rate stake-data)) u100))
             (compound-multiplier (if (get auto-compound stake-data) u12 u10))
             (final-reward (/ (* base-reward compound-multiplier) u10)))
-        {
+        (some {
           amount: (get amount stake-data),
           reward: final-reward,
           unlocked: is-unlocked,
           blocks-remaining: (if is-unlocked u0 (- (get lock-blocks stake-data) elapsed-blocks)),
           auto-compound: (get auto-compound stake-data)
-        })
+        }))
     none))
 
 ;; Fixed leaderboard function - simplified approach
