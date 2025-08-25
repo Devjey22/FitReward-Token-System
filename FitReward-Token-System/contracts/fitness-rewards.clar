@@ -276,4 +276,106 @@
 
 (define-private (distribute-challenge-reward (winner principal) (amount uint))
   (as-contract (ft-transfer? fit-token amount tx-sender winner)))
-  
+
+;; Enhanced staking system
+(define-map user-stakes 
+  { user: principal, stake-id: uint } 
+  { amount: uint, lock-blocks: uint, start-block: uint, reward-rate: uint, auto-compound: bool })
+
+(define-data-var next-stake-id uint u1)
+(define-data-var base-reward-rate uint u5)
+
+(define-public (stake-tokens (amount uint) (lock-blocks uint) (auto-compound bool))
+  (let ((stake-id (var-get next-stake-id))
+        (reward-rate (+ (var-get base-reward-rate) (/ lock-blocks u1440))))
+    (begin
+      (unwrap! (check-contract-active) (err u110))
+      (asserts! (> amount u0) err-invalid-amount)
+      (asserts! (>= lock-blocks u1440) err-invalid-amount) ;; Minimum 10 days
+      (asserts! (>= (ft-get-balance fit-token tx-sender) amount) err-insufficient-balance)
+      (unwrap! (ft-transfer? fit-token amount tx-sender (as-contract tx-sender)) err-insufficient-balance)
+      (map-set user-stakes { user: tx-sender, stake-id: stake-id }
+        {
+          amount: amount,
+          lock-blocks: lock-blocks,
+          start-block: block-height,
+          reward-rate: reward-rate,
+          auto-compound: auto-compound
+        })
+      (var-set next-stake-id (+ stake-id u1))
+      (ok stake-id))))
+
+(define-public (unstake-tokens (stake-id uint))
+  (let ((stake-data (unwrap! (map-get? user-stakes { user: tx-sender, stake-id: stake-id }) err-not-found)))
+    (begin
+      (unwrap! (check-contract-active) (err u110))
+      (asserts! (>= block-height (+ (get start-block stake-data) (get lock-blocks stake-data))) err-invalid-streak)
+      (let ((stake-amount (get amount stake-data))
+            (base-reward (/ (* stake-amount (get reward-rate stake-data)) u100))
+            (compound-multiplier (if (get auto-compound stake-data) u12 u10))
+            (final-reward (/ (* base-reward compound-multiplier) u10)))
+        (begin
+          (map-delete user-stakes { user: tx-sender, stake-id: stake-id })
+          (unwrap! (as-contract (ft-transfer? fit-token stake-amount tx-sender tx-sender)) err-insufficient-balance)
+          (unwrap! (ft-mint? fit-token final-reward tx-sender) err-invalid-amount)
+          (ok { returned: stake-amount, reward: final-reward }))))))
+
+;; Marketplace system
+(define-map marketplace-listings
+  { listing-id: uint }
+  {
+    seller: principal,
+    achievement-type: uint,
+    price: uint,
+    active: bool,
+    created-block: uint
+  })
+
+(define-data-var next-listing-id uint u1)
+(define-data-var marketplace-fee-rate uint u5) ;; 5% fee
+
+(define-public (list-achievement (achievement-type uint) (price uint))
+  (let ((listing-id (var-get next-listing-id))
+        (user-achievement-count (default-to u0 (map-get? user-achievements tx-sender))))
+    (begin
+      (unwrap! (check-contract-active) (err u110))
+      (asserts! (> user-achievement-count u0) err-insufficient-balance)
+      (asserts! (> price u0) err-invalid-amount)
+      (map-set marketplace-listings { listing-id: listing-id }
+        {
+          seller: tx-sender,
+          achievement-type: achievement-type,
+          price: price,
+          active: true,
+          created-block: block-height
+        })
+      (var-set next-listing-id (+ listing-id u1))
+      (ok listing-id))))
+
+(define-public (buy-achievement (listing-id uint))
+  (let ((listing-data (unwrap! (map-get? marketplace-listings { listing-id: listing-id }) err-not-found)))
+    (begin
+      (unwrap! (check-contract-active) (err u110))
+      (asserts! (get active listing-data) err-not-found)
+      (asserts! (not (is-eq tx-sender (get seller listing-data))) err-unauthorized)
+      (asserts! (>= (ft-get-balance fit-token tx-sender) (get price listing-data)) err-insufficient-balance)
+      (let ((marketplace-fee (/ (* (get price listing-data) (var-get marketplace-fee-rate)) u100))
+            (seller-amount (- (get price listing-data) marketplace-fee)))
+        (unwrap! (ft-transfer? fit-token seller-amount tx-sender (get seller listing-data)) err-insufficient-balance)
+        (unwrap! (ft-transfer? fit-token marketplace-fee tx-sender (as-contract tx-sender)) err-insufficient-balance)
+        (map-set user-achievements tx-sender 
+          (+ (default-to u0 (map-get? user-achievements tx-sender)) u1))
+        (map-set user-achievements (get seller listing-data)
+          (- (default-to u0 (map-get? user-achievements (get seller listing-data))) u1))
+        (map-set marketplace-listings { listing-id: listing-id }
+          (merge listing-data { active: false }))
+        (ok true)))))
+
+(define-public (cancel-listing (listing-id uint))
+  (let ((listing-data (unwrap! (map-get? marketplace-listings { listing-id: listing-id }) err-not-found)))
+    (begin
+      (asserts! (is-eq tx-sender (get seller listing-data)) err-unauthorized)
+      (asserts! (get active listing-data) err-not-found)
+      (map-set marketplace-listings { listing-id: listing-id }
+        (merge listing-data { active: false }))
+      (ok true))))
