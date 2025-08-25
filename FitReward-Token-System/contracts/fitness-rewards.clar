@@ -138,7 +138,7 @@
   (begin
     (asserts! (is-eq tx-sender contract-owner) err-owner-only)
     (try! (check-contract-active))
-    (ok (map reward-single-user users achievement-id))))
+    (ok (map (lambda (user) (reward-single-user user achievement-id)) users))))
 
 (define-private (reward-single-user (user principal) (achievement-id uint))
   (let ((achievement-data (unwrap-panic (map-get? achievement-types { achievement-id: achievement-id }))))
@@ -276,7 +276,7 @@
       ;; Distribute rewards to winners
       (let ((winner-count (len winners))
             (reward-per-winner (if (> winner-count u0) (/ (get reward-pool challenge-data) winner-count) u0)))
-        (ok (map distribute-challenge-reward winners reward-per-winner))))))
+        (ok (map (lambda (winner) (distribute-challenge-reward winner reward-per-winner)) winners))))))
 
 (define-private (distribute-challenge-reward (winner principal) (amount uint))
   (as-contract (ft-transfer? fit-token amount tx-sender winner)))
